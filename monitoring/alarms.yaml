@@ -1,0 +1,14 @@
+Resources:
+  ReplicaAvailabilityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: RDSReplicaDown
+      MetricName: DatabaseConnections
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      AlarmActions:
+        - arn:aws:sns:REGION:ACCOUNT_ID:rds-monitoring-topic

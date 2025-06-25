@@ -1,0 +1,96 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: RDS Snapshot Replication with Monitoring
+
+Parameters:
+  RDSInstanceIdentifier:
+    Type: String
+    Description: The RDS DB Instance ID to snapshot
+
+Resources:
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: rdsSnapshotReplicationLambdaRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RDSAccessPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:CreateDBSnapshot
+                  - rds:CopyDBSnapshot
+                  - rds:DescribeDBSnapshots
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  SnapshotReplicationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: rdsSnapshotReplication
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+      Code:
+        ZipFile: |
+          import boto3, datetime
+
+          def lambda_handler(event, context):
+              source_region = 'us-east-1'
+              destination_region = 'us-west-2'
+              rds = boto3.client('rds', region_name=source_region)
+              timestamp = datetime.datetime.utcnow().strftime('%Y%m%d%H%M')
+              snapshot_id = f"rds-auto-snap-{timestamp}"
+              copy_id = f"rds-auto-copy-{timestamp}"
+
+              try:
+                  rds.create_db_snapshot(
+                      DBInstanceIdentifier='{{RDSInstanceIdentifier}}',
+                      DBSnapshotIdentifier=snapshot_id
+                  )
+
+                  print(f"Snapshot {snapshot_id} created")
+
+                  rds.copy_db_snapshot(
+                      SourceDBSnapshotIdentifier=f"arn:aws:rds:{source_region}:YOUR_ACCOUNT_ID:snapshot:{snapshot_id}",
+                      TargetDBSnapshotIdentifier=copy_id,
+                      SourceRegion=source_region,
+                      DestinationRegion=destination_region
+                  )
+
+                  print(f"Copied snapshot to {destination_region} as {copy_id}")
+              except Exception as e:
+                  print(f"Error: {e}")
+                  raise
+
+  SnapshotScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: DailyRdsSnapshotReplication
+      ScheduleExpression: rate(1 day)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt SnapshotReplicationFunction.Arn
+          Id: TargetFunctionV1
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SnapshotReplicationFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+
